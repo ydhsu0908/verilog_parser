@@ -1,0 +1,2466 @@
+#!/usr/bin/perl
+
+################################################################################
+##  Verilog Code Parser                                                       ##
+##  by Y.D Hsu                                                                ##
+################################################################################
+# v1.0 
+#     1.check duplicate module name
+#     2.support postion-mapping instance with 1-layer {}.
+#     3.support name-mapping instance without {}.
+#     4.support instance view
+#     5.support top module display
+#     6.support hierarchy view
+#
+# v1.1 
+#     1.modify ins_*_array to hash from aray
+#
+# v1.2
+#     1.modify ins_*_array back from hash to aray due to performance issue   
+#     2.check port and save port information only if $dump_port=1 for performance issue
+
+   use strict;
+   use Getopt::Std;
+  
+   #parameter
+   my $dump_port = 0;
+   my $print_array_info = 0;
+   my $dump_file = "";
+   #invalid keyword
+   #my @inv_key= qw/begin end reg fork while for posedge negedge 
+   #                always initial/;    
+   my $print_mname_info = 0;
+   my $print_ins_times = 0;
+   my $ins_module=""; 
+   my $show_top = 0;  
+   my $show_hierarchy = 0;  
+      
+   #vparse main variable 
+   my $parse_file;
+   my $line_number = 0;
+   my $module_start  = 0;
+   my $Bigmark_start = 0;
+   my $total_port_number = 0;
+   my $total_inport = 0;
+   my $total_outport = 0;
+   my $total_wire = 0;
+   my $total_inout = 0;
+   my $warn_msg_no = 0;
+
+   my %module_name_array;       #1-D hash  key:name        value:no
+   my %module_no_array;         #1-D hash  key:no          value:name
+   my %port_array;              #2-D hash  key:module no   key:no         value:port name
+   my %port_name_array;         #2-D hash  key:module no   key:port_name  value:no
+   my %in_port_array;           #2-D hash  key:module no   key:no         value:port name
+   my %out_port_array;          #2-D hash  key:module no   key:no         value:port name
+   my %wire_array;              #2-D hash  key:module no   key:no         value:wire name
+   my %inout_array;             #2-D hash  key:module no   key:no         value:port name
+   my $module_no = 0;
+
+   my @ins_array;               #2-D 
+   my @ins_no_array;            #2-D 
+   my @ins_name_array;          #2-D 
+   my @ins_name_no_array;       #2-D 
+   
+   my @ins_noreap_array;        #2-D 
+   my @ins_noreap_name_array;   #2-D 
+   my @ins_times_array;         #2-D 
+   
+   my $parse_top_m_end = 0;
+   my %cell_name;               #1-D hash contains all cell_names of Z/S/L library
+   
+   my @del_cell_arr;            #2-D 
+   my @del_cell_name_arr;       #2-D 
+   my $gen_del_cell_arr_ok = 0;
+   
+   my @module_hier_num;         #1-D 
+   my @module_hier_num_flag;    #1-D 
+   my $gen_module_hier_num_ok = 0; 
+     
+   #other variables in process_body & process_endmodule
+   my $line;
+   my @arrs = ();
+   my @sp = ();
+   my $empty_line;
+   my $value;
+   my %opts;
+
+   #other variables in while loop
+   my @loop_arr;
+   my $low;
+   my $high;
+   my $process_line;
+   my $append_line;
+   my $append="";
+   my $file_read = 1;
+   my $place1;
+   my $place2; 
+   my $temp_s;
+
+   #other variables for grammar check
+   my $last ="";
+   my $parse_start = 1;
+   my $mod_start = 0;
+   my $module_name_occur = 0;
+   my $module_port_occur = 0;
+   my $module_port_dot_need = 0;
+   my $module_port_coma_need = 0;
+   my $module_left_C_occur = 0;
+   my $body_start = 0;
+   my $in_start = 0;
+   my $in_dot_coma_need = 0;
+   my $in_dim_start = 0;
+   my $in_dim_start_once = 0;
+   my $in_dim_eye_need = 0;
+   my $in_dim_number_need = 0;
+   my $in_dim_right_C_need = 0;
+   my $out_start = 0;
+   my $out_dot_coma_need = 0;
+   my $out_dim_start = 0;
+   my $out_dim_start_once = 0;
+   my $out_dim_eye_need = 0;
+   my $out_dim_number_need = 0;
+   my $out_dim_right_C_need = 0;
+   my $wire_start = 0;
+   my $wire_dot_coma_need = 0;
+   my $wire_dim_start = 0;
+   my $wire_dim_start_once = 0;
+   my $wire_dim_eye_need = 0;
+   my $wire_dim_number_need = 0;
+   my $wire_dim_right_C_need = 0;
+   my $inout_start = 0;
+   my $inout_dot_coma_need = 0;
+   my $inout_dim_start = 0;
+   my $inout_dim_start_once = 0;
+   my $inout_dim_eye_need = 0;
+   my $inout_dim_number_need = 0;
+   my $inout_dim_right_C_need = 0;
+   my $comp_start = 0;
+   my $comp_left_C_need = 0;
+   my $comp_dot_need = 0;
+   my $comp_pin_name_need = 0;
+   my $comp_coma_need = 0;
+   my $comp_pin_left_C_need = 0;
+   my $comp_port_name_need = 0;
+   my $comp_pin_right_C_need = 0;
+   my $comp_pin_right_C_need_2 = 0;
+   my $comp_pin_sep_need = 0;
+   my $comp_port_name;
+   my $comp2_sep_need = 0;
+   my $comp2_word_need = 0;
+   my @res_name = qw/ begin end reg fork while for posedge negedge 
+                      always initial module input output wire endmodule 
+                      assign /;   
+   my @wrong_name = qw/ begin end reg fork while for posedge negedge 
+                      always initial assign /; 
+   my %H_res_name;
+   my %H_wrong_name;
+
+######################
+##  main program    ##
+######################
+   #########################################################################
+   # setup environment
+   #########################################################################    
+   &setup_env;
+
+   if($dump_file ne ""){
+      die "file $dump_file exists.\n" if -e $dump_file;
+      open df, "> $dump_file" or die; 
+   }
+
+   $parse_file = $ARGV[0];
+   open pf,"< $parse_file" or die "No such file exists.\n";
+
+   #########################################################################
+   # pre-process and grammar check code here
+   #########################################################################    
+   my $now = localtime;
+   my @arr = split /\s+/, $now;
+   my @arr1 = split /:/,$arr[3];
+   printf "\n";
+   printf "         Verilog Gatelevel Code Parser v1.2\n\n";
+   printf "Author: ydhsu\n";   
+   printf "Email : ydhsu\@via.com.tw \n";
+   printf "-------------------------------------------------------\n";   
+   printf "\nParsing start ... %s/%s %s:%s\n",$arr[1],$arr[2],$arr1[0],$arr1[1];
+   printf "=======================================================\n";
+
+   printf df "\n";
+   printf df "         Verilog Gatelevel Code Parser v1.0\n\n";
+   printf df "Author: ydhsu\n";   
+   printf df "Email : ydhsu\@via.com.tw \n";
+   printf df "-------------------------------------------------------\n";   
+   printf df "\nParsing start ... %s/%s %s:%s\n",$arr[1],$arr[2],$arr1[0],$arr1[1];
+   printf df "=======================================================\n";
+   while (defined($line = <>)) {
+          $line_number++;
+          chomp($line);
+          $line = &remove_bigmark($line);    #remove big mark
+          $line = &remove_mark($line);       #remove mark
+          &grammar_check($line);
+       }
+
+   
+   #########################################################################
+   # post-process code here
+   #########################################################################    
+   printf    "\n";
+   printf    "Total module  no.: %d \n",$module_no;
+   printf    "Total error   no.: %d \n",0;
+   printf    "Total warning no.: %d \n",$warn_msg_no;
+   printf df "\n";
+   printf df "Total module  no.: %d \n",$module_no;
+   printf df "Total error   no.: %d \n",0;
+   printf df "Total warning no.: %d \n",$warn_msg_no;
+   #########################################################################
+   # print result
+   #########################################################################    
+   if ($show_top == 1) {
+       printf "=======================================================\n";
+       printf df "=======================================================\n";
+       &print_highest_module("",""); ##default
+   }
+
+   if ($show_hierarchy == 1) {
+       printf "=======================================================\n";
+       printf df "=======================================================\n";
+       &print_hierarchy;
+   }   
+   
+   if($print_array_info == 1) {
+      printf "=======================================================\n";
+      printf df "=======================================================\n";
+      &debug_print_array;
+   }
+
+   if($print_mname_info == 1) {
+      printf "=======================================================\n";
+      printf "Modules:      \n";
+      printf df "=======================================================\n";
+      printf df "Modules:      \n";
+      
+      #my $i;
+      #for($i=0;$i<=$#module_name_array;$i++) {
+      #   printf "        $module_name_array[$i]\n";
+      #}
+      my $key; my $value;
+      while(($key,$value) = each %module_name_array){
+          printf "        $key\n";
+          printf df "        $key\n";  
+      }
+      
+   }
+
+   if($ins_module ne ""){
+      $print_ins_times =1;
+   }
+
+   if($print_ins_times == 1) {
+      my $i;
+      my $j;
+      my $dont_exit=1;
+      printf "=======================================================\n";
+      printf df "=======================================================\n";
+      #for($i=0;$i<$module_no;$i++){
+      #       if($module_name_array[$i] eq $ins_module) {
+      #          printf "module_name: $module_name_array[$i]\n";
+      #          &print_all_inst;
+      #          $dont_exit=0;
+      #          last;
+      #       }
+      #}
+      if(exists $module_name_array{$ins_module} ) {
+         printf "module_name: $ins_module\n"; 
+         printf df "module_name: $ins_module\n"; 
+         &print_all_inst($module_name_array{$ins_module});
+         $dont_exit=0;
+      }
+      
+      if($dont_exit==1) {
+         printf "--- no module %-5s exist.\n",$ins_module;
+         printf df "--- no module %-5s exist.\n",$ins_module;
+      }
+   }
+
+   $now = localtime;
+   my @arr = split /\s+/, $now;
+   my @arr1 = split /:/,$arr[3];
+   printf "\n";
+   printf "=======================================================\n";
+   printf "Parsing end ...   %s/%s %s:%s\n\n",$arr[1],$arr[2],$arr1[0],$arr1[1];
+   printf df "\n";
+   printf df "=======================================================\n";
+   printf df "Parsing end ...   %s/%s %s:%s\n\n",$arr[1],$arr[2],$arr1[0],$arr1[1];
+   #if($dump_file eq ""){
+      &loop_ask;
+   #}
+######################
+##  subroutine area ##
+######################
+sub debug_print_array {
+    my $i;
+    for($i=0;$i<$module_no;$i++){
+        printf "1st element  of IN array of module $i: %-5s\n"  ,$in_port_array{$i}{0};
+    }
+}
+
+sub setup_env { 
+  if ($#ARGV == -1) {
+      printf "\n";
+      printf "         Verilog Gatelevel Code Parser v1.2\n\n";
+      printf "Author: ydhsu\n";   
+      printf "Email : ydhsu\@via.com.tw \n";
+      printf "-----------------------------------------------------------\n";
+      printf "Usage: parse [-array]          verilog.v  \n";
+      printf "             [-mname]                       \n";
+      printf "             [-port]                        \n";
+      printf "             [-top]                         \n";     
+      printf "             [-hier]                        \n";     
+      printf "             [-i module_name]               \n";
+      printf "             [-l log_file]                  \n";
+      printf "------------------------------------------------------------\n";
+      printf "[Arg1] | [Arg2]      | [Description] \n";
+      printf "-array |             | dump INPUT array for debug \n";
+      printf "-mname |             | dump module name           \n";
+      printf "-port  |             | dump ports of each module  \n";
+      printf "-top   |             | dump top module            \n";
+      printf "-hier  |             | dump hierarchy (all)       \n";
+      printf "-i     | module_name | dump instance times of specified module\n";
+      printf "-l     | log_file    | dump log to log_file       \n\n";
+
+      printf df "\n";
+      printf df "         Verilog Gatelevel Code Parser v1.2\n\n";
+      printf df "Author: ydhsu\n";   
+      printf df "Email : ydhsu\@via.com.tw \n";
+      printf df "-----------------------------------------------------------\n";
+      printf df "Usage: parse [-array]          verilog.v  \n";
+      printf df "             [-mname]                       \n";
+      printf df "             [-port]                        \n";
+      printf df "             [-top]                         \n";     
+      printf df "             [-hier]                        \n";     
+      printf df "             [-i module_name]               \n";
+      printf df "             [-l log_file]                  \n";
+      printf df "------------------------------------------------------------\n";
+      printf df "[Arg1] | [Arg2]      | [Description] \n";
+      printf df "-array |             | dump INPUT array for debug \n";
+      printf df "-mname |             | dump module name           \n";
+      printf df "-port  |             | dump ports of each module  \n";
+      printf df "-top   |             | dump top module            \n";
+      printf df "-hier  |             | dump hierarchy (all)       \n";
+      printf df "-i     | module_name | dump instance times of specified module\n";
+      printf df "-l     | log_file    | dump log to log_file       \n\n";
+      
+      exit;
+  }
+  else {
+      &getopt ('apmilth',\%opts);
+      if( $opts{"a"} eq "rray" ) {
+          $print_array_info = 1;
+      }
+      if( $opts{"p"} eq "ort" ) {
+          $dump_port = 1;
+      }
+      if( $opts{"m"} eq "name" ) {
+          $print_mname_info = 1;
+      }
+      if( $opts{"t"} eq "op" ) {
+          $show_top = 1;
+      }    
+      if( $opts{"h"} eq "ier" ) {
+          $show_hierarchy = 1;
+      }         
+        
+      #if( $opts{"i"} eq "nst" ) {
+      #   $print_ins_times = 1;
+      #}
+          
+          $ins_module = $opts{"i"};
+          $dump_file = $opts{"l"};
+  }
+
+  my $i;
+  for($i=0;$i<=$#res_name;$i++){
+      $H_res_name{$res_name[$i]}=1;
+  }
+  for($i=0;$i<=$#wrong_name;$i++){
+      $H_wrong_name{$wrong_name[$i]}=1;
+  }
+  
+}
+#---------------------------------------------------------------------------------    
+
+sub check_port_number {       #find all port declaration entries in all in/out ports
+  if($total_port_number != $total_inport + $total_outport + $total_inout) {
+      printf "     Error, wrong port number! \n";
+      printf df "     Error, wrong port number! \n";
+      &print_and_exit;
+  }
+}
+
+#---------------------------------------------------------------------------------    
+sub remove_bigmark {
+    my $v;
+    my $temp;
+    my @bmark_arr = ();
+    my $line_low, my $line_high;
+    
+       if($Bigmark_start == 1) {
+           $Bigmark_start = 0; 
+            $_ = $_[0];
+            s/\/\*(.*?)\*\///g;                 #clean /*...*/
+            $v = index($_,"*/");
+
+            if($v == -1){                          #no */ left
+               $temp = " ";
+               $Bigmark_start = 1;
+            }
+            else{
+                 @bmark_arr = split /\*\//, $_;    #split by */
+                 
+                 if($#bmark_arr == 1) {
+                    $line_low = $bmark_arr[1];
+                    $_ = $line_low;
+                    
+                    $v = index($_,"/*");
+                    if($v == -1){                  #no /* left
+                       $temp = $_;
+                    }
+                    else{
+                      @bmark_arr = split /\/\*/, $_;    #split by /*
+                         $line_high = $bmark_arr[0];
+                         $temp = $line_high;
+                         $Bigmark_start = 1;
+                    }
+                 }
+                 else {
+                    $temp = " "; 
+                 }
+            }
+        }
+        else {
+            $_ = $_[0];
+            s/\/\*(.*?)\*\///g;                 #clean /*...*/ ...good
+
+            $v = index($_,"/*");
+            
+            if($v == -1){                          #no /* left
+               $temp = $_;
+            }
+            else{
+                 @bmark_arr = split /\/\*/, $_;    #split by /*
+
+                 if($#bmark_arr == 1) {
+                    $line_high = $bmark_arr[0];
+                    $temp = $line_high;
+                    $Bigmark_start = 1;
+                 }
+                 else {
+                    $temp = " ";
+                    $Bigmark_start = 1; 
+                }
+            }
+        }
+            return $temp;
+}
+#---------------------------------------------------------------------------------    
+
+sub remove_mark {
+    my @temp = split /\/\//, $_[0];
+    $_    = $temp[0];
+    $_;
+}
+#---------------------------------------------------------------------------------    
+sub save_ins {
+  my $len = $#{$ins_array[$module_no]};
+  $ins_array[$module_no][$len+1]=$_[0];
+
+  $len = $#{$ins_noreap_array[$module_no]};
+  my $i;
+  my $equal=0;
+  for($i=0;$i<=$len;$i++){
+      if($ins_noreap_array[$module_no][$i] eq $_[0]){
+         #ins has been push once 
+         $ins_times_array[$module_no][$i]++;
+         $equal=1;
+         last;
+      }
+  }
+  
+  if($equal==0){
+     $ins_noreap_array[$module_no][$len+1]=$_[0];
+     $ins_times_array[$module_no][$len+1]=1; 
+  }
+}
+#---------------------------------------------------------------------------------    
+sub save_ins_name {
+  my $len = $#{$ins_name_array[$module_no]};
+  $ins_name_array[$module_no][$len+1]=$_[0];
+}
+
+#---------------------------------------------------------------------------------    
+
+sub save_all_ports { 
+  #my $totalport = -1;
+    
+  if($_[0]==0) { 
+     #foreach (keys %{ $port_array{$module_no} }){
+     #        $totalport ++;
+     #}
+     if($dump_port == 1){
+        my @ta = keys %{ $port_array{$module_no} };
+        my $totalport = $#ta;
+        $port_array{$module_no}{$totalport+1}= $_[1] ;
+        $port_name_array{$module_no}{$_[1]}= $totalport+1 ;
+        $total_port_number ++;
+     }
+  }
+  elsif($_[0]==1) {
+     if($dump_port == 1){ 
+        &check_port_valid($_[1]);
+        #foreach (keys %{ $in_port_array{$module_no} }){
+        #        $totalport ++;
+        #}
+        my @ta = keys %{ $in_port_array{$module_no} };
+        my $totalport = $#ta;
+        $in_port_array{$module_no}{$totalport+1}= $_[1] ;
+        $total_inport ++;
+     }
+  }
+  elsif($_[0]==2) {
+     if($dump_port == 1){ 
+        &check_port_valid($_[1]);
+        #foreach (keys %{ $out_port_array{$module_no} }){
+        #        $totalport ++;
+        #}
+        my @ta = keys %{ $out_port_array{$module_no} };
+        my $totalport = $#ta;
+        $out_port_array{$module_no}{$totalport+1}= $_[1] ;
+        $total_outport ++;
+     }
+  }
+  elsif($_[0]==3) {
+     if($dump_port == 1){ 
+        #foreach (keys %{ $wire_array{$module_no} }){
+        #        $totalport ++;
+        #}
+        my @ta = keys %{ $wire_array{$module_no} };
+        my $totalport = $#ta;
+        $wire_array{$module_no}{$totalport+1}= $_[1] ;
+        $total_wire ++;
+     }
+  }
+  elsif($_[0]==4) {
+     if($dump_port == 1){ 
+        #foreach (keys %{ $inout_array{$module_no} }){
+        #        $totalport ++;
+        #}
+        my @ta = keys %{ $inout_array{$module_no} };
+        my $totalport = $#ta;
+        $inout_array{$module_no}{$totalport+1}= $_[1] ;
+        $total_inout ++;
+     }
+  }
+  else{
+     printf "wrong arg1 of &save_all_ports\n";
+     &print_and_exit;
+  }
+
+}
+#---------------------------------------------------------------------------------    
+
+sub check_port_valid { #find in/out port in port declaration lists
+   #my $i;
+   #for($i=0;$i<=$#{$port_array[$module_no]};$i++){  
+   #  if($_[0] eq $port_array[$module_no][$i]) {
+   #     return 1;
+   #  }
+   #}
+   
+   #my $value;
+   #foreach $value (values %{ $port_array{$module_no} }){
+   #  if($value eq $_[0]) {
+   #    return 1;
+   #  }
+   #}
+
+   if(exists $port_name_array{$module_no}{$_[0]}){
+      return 1;
+   }
+   
+   printf "     Error: ".$_[0]." not found in port declaration. \n";
+   printf df "     Error: ".$_[0]." not found in port declaration. \n";
+   &print_and_exit;   
+}
+
+#---------------------------------------------------------------------------------    
+
+sub print_all_ports {
+   
+   if($total_port_number == 0) {
+      return;
+   }
+
+   printf "     [P]:";
+   printf df "     [P]:";
+   my $y;
+   my $temp="";
+   my $append = 0, my $first_print = 0;
+   for($y=0;$y<$total_port_number;$y++){
+       if(length($temp) + $port_array{$module_no}{$y} > 50) {
+          if($first_print == 0 ) {
+             printf $temp."\n";
+             printf df $temp."\n";
+          }
+          else {
+             printf "         ".$temp."\n";
+             printf df "         ".$temp."\n";
+          }
+          if($y == $total_port_number - 1) {
+             printf "          ".$port_array{$module_no}{$y};  
+             printf df "          ".$port_array{$module_no}{$y};  
+          } else {
+            $temp= "";
+          }
+          $append = 0;
+          $first_print = 1;
+       }
+       else {
+          $temp = $temp." ".$port_array{$module_no}{$y};
+          $append = 1;
+       }
+   }
+   if($append == 1 & $first_print == 0) {
+      printf $temp."\n";
+      printf df $temp."\n";
+   }
+   elsif ($append == 1 & $first_print == 1) {
+          printf "         ".$temp."\n";
+          printf df "         ".$temp."\n";
+   }
+   else {
+      printf "\n";
+      printf df "\n";
+   }
+}
+#---------------------------------------------------------------------------------    
+
+sub print_all_inports {
+  if($total_inport ==0) {
+     printf "     Warning.. this module does not have input port \n";
+     printf df "     Warning.. this module does not have input port \n";
+     $warn_msg_no ++;
+  }
+  else {
+           printf "     [I]:";
+           printf df "     [I]:";
+           my $y;
+           my $temp="";
+           my $append = 0, my $first_print = 0;
+           for($y=0;$y<$total_inport;$y++){
+               if(length($temp) + $in_port_array{$module_no}{$y} > 50) {
+                  if($first_print == 0 ) {
+                     printf $temp."\n";
+                     printf df $temp."\n";
+                  }
+                  else {
+                    printf "         ".$temp."\n";
+                    printf df "         ".$temp."\n";
+                  }
+                  if($y == $total_inport - 1) {
+                    printf "          ".$in_port_array{$module_no}{$y};  
+                    printf df "          ".$in_port_array{$module_no}{$y};  
+                  } else {
+                    $temp= "";
+                  }
+                  $append = 0;
+                  $first_print = 1;
+               }
+               else {
+                  $temp = $temp." ".$in_port_array{$module_no}{$y};
+                  $append = 1;
+               }
+           }
+           if($append == 1 & $first_print == 0) {
+              printf "".$temp."\n";
+              printf df "".$temp."\n";
+           }
+           elsif ($append == 1 & $first_print == 1) {
+              printf "         ".$temp."\n";
+              printf df "         ".$temp."\n";
+           }
+           else {
+              printf "\n";
+              printf df "\n";
+           }
+  }
+}
+#---------------------------------------------------------------------------------    
+sub print_all_outports {
+  if($total_outport ==0) {
+     printf "     Warning.. this module does not have output port \n";
+     printf df "     Warning.. this module does not have output port \n";
+     $warn_msg_no ++;
+  }
+  else {
+           printf "     [O]:";
+           printf df "     [O]:";
+           my $y;
+           my $temp="";
+           my $append = 0, my $first_print = 0;
+           for($y=0;$y<$total_outport;$y++){
+               if(length($temp) + $out_port_array{$module_no}{$y} > 50) {
+                  if($first_print == 0 ) {
+                     printf $temp."\n";
+                     printf df $temp."\n";
+                  }
+                  else {
+                     printf "         ".$temp."\n";
+                     printf df "         ".$temp."\n";
+                  }
+                  if($y == $total_outport - 1) {
+                    printf "          ".$out_port_array{$module_no}{$y};  
+                    printf df "          ".$out_port_array{$module_no}{$y};  
+                  } else {
+                    $temp= "";
+                  }
+                  $append = 0;
+                  $first_print = 1;
+               }
+               else {
+                  $temp = $temp." ".$out_port_array{$module_no}{$y};
+                  $append = 1;
+               }
+           }
+           if($append == 1 & $first_print == 0) {
+              printf "".$temp."\n";
+              printf df "".$temp."\n";
+           }
+           elsif ($append == 1 & $first_print == 1) {
+              printf "         ".$temp."\n";
+              printf df "         ".$temp."\n";
+           }
+           else {
+              printf "\n";
+              printf df "\n";
+           }
+  }
+}
+
+#---------------------------------------------------------------------------------    
+
+sub print_all_wires {
+
+   if($total_wire == 0) {
+      return;
+   }
+   
+   printf "     [W]:";
+   printf df "     [W]:";
+   my $y;
+   my $temp="";
+   my $append = 0, my $first_print = 0;
+   for($y=0;$y<$total_wire;$y++){
+       if(length($temp) + $wire_array{$module_no}{$y} > 50) {
+          if($first_print == 0 ) {
+             printf $temp."\n";
+             printf df $temp."\n";
+          }
+          else {
+             printf "         ".$temp."\n";
+             printf df "         ".$temp."\n";
+          }
+          if($y == $total_wire - 1) {
+             printf "          ".$wire_array{$module_no}{$y};  
+             printf df "          ".$wire_array{$module_no}{$y};  
+          } else {
+            $temp= "";
+          }
+          $append = 0;
+          $first_print = 1;
+       }
+       else {
+          $temp = $temp." ".$wire_array{$module_no}{$y};
+          $append = 1;
+       }
+   }
+   if($append == 1 & $first_print == 0) {
+      printf $temp."\n";
+      printf df $temp."\n";
+   }
+   elsif ($append == 1 & $first_print == 1) {
+          printf "         ".$temp."\n";
+          printf df "         ".$temp."\n";
+   }
+   else {
+      printf "\n";
+      printf df "\n";
+   }
+
+}
+#---------------------------------------------------------------------------------    
+sub print_all_inout{
+  if($total_inout > 0) {           
+
+           printf "     [B]:";
+           printf df "     [B]:";
+           my $y;
+           my $temp="";
+           my $append = 0, my $first_print = 0;
+           for($y=0;$y<$total_inout;$y++){
+               if(length($temp) + $inout_array{$module_no}{$y} > 50) {
+                  if($first_print == 0 ) {
+                     printf $temp."\n";
+                     printf df $temp."\n";
+                  }
+                  else {
+                     printf "         ".$temp."\n";
+                     printf df "         ".$temp."\n";
+                  }
+                  if($y == $total_inout - 1) {
+                    printf "          ".$inout_array{$module_no}{$y};  
+                    printf df "          ".$inout_array{$module_no}{$y};  
+                  } else {
+                    $temp= "";
+                  }
+                  $append = 0;
+                  $first_print = 1;
+               }
+               else {
+                  $temp = $temp." ".$inout_array{$module_no}{$y};
+                  $append = 1;
+               }
+           }
+           if($append == 1 & $first_print == 0) {
+              printf "".$temp."\n";
+              printf df "".$temp."\n";
+           }
+           elsif ($append == 1 & $first_print == 1) {
+              printf "         ".$temp."\n";
+              printf df "         ".$temp."\n";
+           }
+           else {
+              printf "\n";
+              printf df "\n";
+           }
+  }
+}
+
+
+#---------------------------------------------------------------------------------    
+
+sub print_and_exit {
+        printf "=======================================================\n";
+        printf "Parsing end...with 1 error and ".$warn_msg_no. " warnings\n";
+        printf "exit\n\n";
+        printf df "=======================================================\n";
+        printf df "Parsing end...with 1 error and ".$warn_msg_no. " warnings\n";
+        printf df "exit\n\n";
+        exit;
+}
+
+#---------------------------------------------------------------------------------    
+sub check_inst_name_repeat {
+  my $i;
+  my $len = $#{$ins_name_array[$module_no]};
+  my $temp;
+  
+  for($i=0;$i<$len;$i++) { #dont check $len, so ignore "="
+      $temp = $ins_name_array[$module_no][$i];  
+      if($_[0] eq $temp){
+         printf "%-5s Error: instance name %-3s duplicates..\n",$line_number,$_[0];
+         printf df "%-5s Error: instance name %-3s duplicates..\n",$line_number,$_[0];
+         &print_and_exit;
+      }
+  }
+
+  return 1;
+}
+
+#---------------------------------------------------------------------------------    
+sub check_module_name_repeat {
+  #my $i;
+  #for($i=0;$i<=$#module_name_array;$i++) {
+  #    if($_[0] eq $module_name_array[$i]){
+  #       printf "%-5s Error: module name %-3s duplicates..\n",$line_number,$_[0];
+  #       &print_and_exit;
+  #    }
+  #}
+  if(exists $module_name_array{$_[0]} ) {
+     printf "%-5s Error: module name %-3s duplicates..\n",$line_number,$_[0];
+     printf df "%-5s Error: module name %-3s duplicates..\n",$line_number,$_[0];
+     &print_and_exit;
+  }  
+  
+  return 1;
+}
+
+#---------------------------------------------------------------------------------    
+sub check_module_name {  #$_[0]=module_name
+    #my $i;
+    #for($i=0;$i<=$#module_name_array;$i++) {
+    #    if($_[0] eq $module_name_array[$i]){
+    #      return 1;
+    #   }
+    #}
+  if(exists $module_name_array{$_[0]} ) {
+     return 1;
+  }  
+     return 0;
+}
+
+#---------------------------------------------------------------------------------    
+sub find_module_name {  #return no.
+    #my $i;
+    #for($i=0;$i<=$#module_name_array;$i++) {
+    #    if($_[0] eq $module_name_array[$i]){
+    #      return $i;
+    #   }
+    #}
+  if(exists $module_name_array{$_[0]} ) {
+     return $module_name_array{$_[0]}; 
+  }      
+
+    return -1;
+}
+
+#---------------------------------------------------------------------------------    
+sub print_all_inst { #$_[0] = module no.
+    my $j;
+    printf "\n";
+    printf df "\n";
+    if($#{$ins_times_array[$_[0]]} >=0){
+       for($j=0;$j<=$#{$ins_times_array[$_[0]]};$j++){
+           printf "--- %-20s has been initanciated %-3d times.\n",$ins_noreap_array[$_[0]][$j],$ins_times_array[$_[0]][$j];
+           printf df "--- %-20s has been initanciated %-3d times.\n",$ins_noreap_array[$_[0]][$j],$ins_times_array[$_[0]][$j];
+       }
+       printf "\n";
+       printf df "\n";
+    }
+    else {
+        printf "--- %-5s contains no instance.\n",$module_no_array{$_[0]};
+        printf df "--- %-5s contains no instance.\n",$module_no_array{$_[0]};
+    } 
+}
+
+#---------------------------------------------------------------------------------    
+sub print_highest_module{
+       my $i;
+       my $p;
+       my $y;
+       my $z;
+       my $temp;
+       my @arr;
+
+ if($parse_top_m_end == 0){  
+    
+        if($gen_del_cell_arr_ok == 0) {
+           &gen_del_cell_arr;
+        }
+
+        if($gen_del_cell_arr_ok == 0) {
+           return;
+        }
+
+        if($gen_module_hier_num_ok == 0) {
+           &gen_module_hier_num;
+        }
+
+       $parse_top_m_end = 1;
+       printf "Top module: \n\n";
+       printf df "Top module: \n\n";
+       for($i=0;$i<$module_no;$i++){
+           if($module_hier_num[$i]==0){
+              #printf "           %-5s\n",$module_name_array[$i];
+              printf "           %-5s\n",$module_no_array{$i};
+              printf df "           %-5s\n",$module_no_array{$i};
+           }
+       }
+       printf "\n";
+       printf df "\n";
+
+       #my @arr = split /\s+/, $time1;
+       #my @arr1 = split /:/,$arr[3];
+       #printf "\nStart time: %s/%s %s:%s\n",$arr[1],$arr[2],$arr1[0],$arr1[1];       
+       #$time2 = localtime;
+       #my @arr = split /\s+/, $time2;
+       #my @arr1 = split /:/,$arr[3];
+       #printf "End   time: %s/%s %s:%s\n",$arr[1],$arr[2],$arr1[0],$arr1[1];
+
+ } #end if($parse_top_m_end)
+ else {  
+       printf "Top module: \n\n";
+       printf df "Top module: \n\n";
+       for($i=0;$i<$module_no;$i++){
+           if($module_hier_num[$i]==0){
+              #printf "           %-5s\n",$module_name_array[$i];
+              printf "           %-5s\n",$module_no_array{$i};
+              printf df "           %-5s\n",$module_no_array{$i};
+           }
+       }
+       printf "\n";
+       printf df "\n";
+
+       #my @arr = split /\s+/, $time1;
+       #my @arr1 = split /:/,$arr[3];
+       #printf "\nStart time: %s/%s %s:%s\n",$arr[1],$arr[2],$arr1[0],$arr1[1];       
+       #$time2 = localtime;
+       #my @arr = split /\s+/, $time2;
+       #my @arr1 = split /:/,$arr[3];
+       #printf "End   time: %s/%s %s:%s\n",$arr[1],$arr[2],$arr1[0],$arr1[1];
+ }
+}
+
+#---------------------------------------------------------------------------------    
+sub gen_module_hier_num{
+    my $i;
+    my $y;
+    my $p;
+    my $z;
+    my $temp;
+        
+        for($i=0;$i<$module_no;$i++){
+            $module_hier_num[$i] =0;
+            $module_hier_num_flag[$i] =0;
+        }
+       
+        for($i=0;$i<$module_no;$i++){           
+            for($p=0;$p<$module_no;$p++){                      #reset flag
+                $module_hier_num_flag[$p] =0;
+            }              
+            #for($y=0;$y<=$#{$del_cell_arr[$i]};$y++){         #for each inst
+            #    $temp = $del_cell_arr[$i][$y];
+                #for($z=0;$z<$module_no;$z++){                     
+                #    if($temp eq $module_name_array[$z]){      #compare to module name
+                #       if($module_hier_num_flag[$z]==0){
+                #          $module_hier_num[$z] ++;
+                #          $module_hier_num_flag[$z]=1;        #set flag
+                #          last;
+                #       } 
+                #    } 
+                #}
+             
+            for($y=0;$y<=$#{$del_cell_arr[$i]};$y++){         #for each inst
+                $temp = $del_cell_arr[$i][$y];
+                if(exists $module_name_array{$temp}){
+                      $z = $module_name_array{$temp};
+                   if($module_hier_num_flag[$z]==0){ 
+                      $module_hier_num[$z] ++;
+                      $module_hier_num_flag[$z]=1;        #set flag
+                   } 
+                }
+                
+            
+            }
+        
+       }
+
+    $gen_module_hier_num_ok = 1;   
+}
+#---------------------------------------------------------------------------------    
+sub gen_del_cell_arr {
+    my $temp;
+    my $read;
+    my $num;
+    my $i;
+    my $y;
+        
+    $temp = open zfin, "< z_cell";
+    if($temp == 1) { 
+        while(defined($read=<zfin>)){
+              chomp($read);
+              $cell_name{$read}=1;
+        }
+
+        for($i=0;$i<$module_no;$i++){
+            $num=0;
+            for($y=0;$y<=$#{$ins_array[$i]};$y++){
+                if($cell_name{$ins_array[$i][$y]} == undef) {
+                   $del_cell_arr[$i][$num]      = $ins_array[$i][$y];
+                   $del_cell_name_arr[$i][$num] = $ins_name_array[$i][$y];
+                   #printf "del_cell_arr[$i][$num]: $del_cell_arr[$i][$num] \n";
+                   #printf "del_cell_n_arr[$i][$num]: $del_cell_name_arr[$i][$num] \n";
+                   $num++;
+                }
+            }
+        }
+        
+        $gen_del_cell_arr_ok = 1;
+    }
+    else {
+       printf "Abort... please create cell_library_name file(default: z_cell)\n";  
+       printf df "Abort... please create cell_library_name file(default: z_cell)\n";  
+       return;        
+    }
+}
+#---------------------------------------------------------------------------------    
+sub print_hierarchy{
+    my $mname   = $_[0]; #desired module, default = top
+    my $d_deep  = $_[1]; #desired depth,  default = 0
+    
+    my $i;
+    #for($i=0;$i<=$#module_name_array;$i++) {              #put module_name_array into hash
+    #   $hash_mname_array{$module_name_array[$i]}=$i;
+    #}
+    
+
+    if($gen_del_cell_arr_ok == 0) {                       #gen_del_cell_arr if not gen
+       &gen_del_cell_arr;
+    } 
+    
+    if($gen_del_cell_arr_ok == 0) {                       
+       return;
+    }
+    
+    if($gen_module_hier_num_ok == 0) {                    #gen_module_hier_num if not gen
+           &gen_module_hier_num;
+    }
+           
+    printf "Hierarchy map:\n\n";
+    printf df "Hierarchy map:\n\n";
+    
+    if($mname eq ""){ #default = top
+       for($i=0;$i<=$#module_hier_num;$i++) {
+           if($module_hier_num[$i]==0){                      #print from all hier_num=0 module                
+              if($d_deep eq ""){
+                 &dump_hier_loop($module_no_array{$i},"",0,"");    
+              }
+              else{
+                 &dump_hier_loop($module_no_array{$i},"",0,$d_deep);    
+              }
+           }  
+       }
+    }
+    else {
+       if($d_deep eq ""){       
+          &dump_hier_loop($module_no_array{$module_name_array{$mname}},"",0,"");
+       }
+       else {
+          &dump_hier_loop($module_no_array{$module_name_array{$mname}},"",0,$d_deep);
+
+       }
+    }
+    
+    printf "\n";
+    printf df "\n";
+}
+#---------------------------------------------------------------------------------    
+sub dump_hier_loop{
+    my $mname = $_[0]; #module   name
+    my $iname = $_[1]; #instance name
+    my $deep  = $_[2]; #current  depth
+    my $d_deep= $_[3]; #desired  depth
+    my $m_no  = $module_name_array{$_[0]};
+    my $i;
+    
+    for($i=0;$i<=($deep*7);$i++){
+       printf " ";
+       printf df " ";
+    }
+
+    if($deep==0){
+        printf "     $mname\n";
+        printf df "     $mname\n";
+    }
+    else {
+        printf "|--- $mname($iname)\n",;
+        printf df "|--- $mname($iname)\n",;
+    }
+    
+    #printf "d_deep: $d_deep, deep: $deep\n";
+    if($d_deep eq "") {
+       $d_deep = -1;
+    }
+
+    if($deep == $d_deep){ #dont go recursive print if meet desired depth
+       return;
+    }
+    else {
+      if(exists $module_name_array{$_[0]} ){    
+         for($i=0;$i<=$#{$del_cell_arr[$m_no]};$i++){
+             &dump_hier_loop($del_cell_arr[$m_no][$i],$del_cell_name_arr[$m_no][$i],$deep+1,$d_deep);
+         }
+      }
+      else {
+         #printf "m_no: $m_no\n"; 
+         return; 
+      }
+    }
+}
+
+
+
+sub grammar_check {
+    my $line;
+    my @arr;
+    my $i;
+    my $temp;
+    my $cur;
+    my $pre;
+    
+    $line = $_[0];
+    @arr = &seperate_line($line);
+
+    for($i=0; $i<=$#arr; $i++){
+        
+        $cur = $arr[$i];
+        if($i > 0){
+           $pre = $arr[$i-1];
+        }
+        else {
+            $pre = $last;
+        }
+        
+        &check_wrong_name($cur);
+
+        if($parse_start==1){
+           &phase0_check_dirty($cur,$#arr);
+        }
+        elsif($comp_start==1 | $comp_left_C_need==1 | $comp_dot_need==1 | 
+              $comp_pin_name_need==1 | $comp_coma_need==1 | $comp_pin_left_C_need==1 |
+              $comp_port_name_need==1 | $comp_pin_right_C_need==1 | $comp_pin_right_C_need_2==1 |
+              $comp_pin_sep_need==1 | $comp2_sep_need==1 | $comp2_word_need==1){
+              &phase2_check_comp($cur,$pre);
+        }
+        elsif($in_start==1 | $in_dot_coma_need==1 | $in_dim_start==1 |
+              $in_dim_start_once==1 | $in_dim_eye_need==1 | $in_dim_number_need==1 |
+              $in_dim_right_C_need==1){
+              &phase2_check_in($cur,$pre);
+        }
+        elsif($out_start==1 | $out_dot_coma_need==1 | $out_dim_start==1 |
+              $out_dim_start_once==1 | $out_dim_eye_need==1 | $out_dim_number_need==1 |
+              $out_dim_right_C_need==1){
+              &phase2_check_out($cur,$pre);
+        }
+        elsif($wire_start==1 | $wire_dot_coma_need==1 | $wire_dim_start==1 |
+              $wire_dim_start_once==1 | $wire_dim_eye_need==1 | $wire_dim_number_need==1 |
+              $wire_dim_right_C_need==1){
+              &phase2_check_wire($cur,$pre);
+        }
+        elsif($inout_start==1 | $inout_dot_coma_need==1 | $inout_dim_start==1 |
+              $inout_dim_start_once==1 | $inout_dim_eye_need==1 | $inout_dim_number_need==1 |
+              $inout_dim_right_C_need==1){
+              &phase2_check_inout($cur,$pre);   
+        }
+        elsif($mod_start==1 | $module_name_occur==1 | $module_port_occur==1 | 
+              $module_port_dot_need==1 | $module_port_coma_need==1 |
+              $module_left_C_occur==1){
+              &phase1_check_module($cur,$pre);  
+        }
+        elsif($body_start==1){
+              &phase2_check_body($cur,$pre); 
+              &phase3_check_end($cur,$pre); 
+        }       
+        else {
+              printf "wrong entry. cur: $cur, line: $line_number\n";
+              printf df "wrong entry. cur: $cur, line: $line_number\n";
+              exit;
+        }
+    }
+    $last = $arr[$#arr];
+}
+
+
+sub phase0_check_dirty {
+        my $fir = $_[0];
+        my $num = $_[1];
+        
+        ###########################################################
+        if($parse_start == 1) { 
+           if($fir eq "module") {
+              $parse_start  =0;  
+              $mod_start =1; 
+           } 
+           elsif ($num > -1 & $mod_start==0) {     # dirty word
+                  printf "%-5d dirty word found: \"%s\".\n",$line_number, $fir;
+                  printf df "%-5d dirty word found: \"%s\".\n",$line_number, $fir;
+                  &print_and_exit;
+           }
+        next;   
+        }
+        ###########################################################
+}
+
+sub phase1_check_module {
+        my $cur = $_[0];
+        my $pre = $_[1];
+        my $temp;
+
+        ###########################################################
+        if($mod_start == 1) {
+            if($module_name_occur==0) {
+               if(($temp = &is_word($cur))==1) { #is word
+                   &check_res_name($cur);
+                   &check_module_name_repeat;
+                   if($dump_port == 1){
+                      printf "%-5d[module name] $_[0]\n", $line_number;
+                      printf df "%-5d[module name] $_[0]\n", $line_number;
+                   }
+                   #push(@module_name_array,$_[0]);
+                   $module_name_array{$_[0]}=$module_no;  #turn to hash
+                   #$hash_mname_array{$_[0]}=$module_no;  #turn to hash
+                   $module_no_array{$module_no}=$_[0];    #turn to hash
+
+                   $mod_start=0;
+                   $module_start = 1;
+                   $module_name_occur=1;
+               }
+               else {#no module name
+                  printf "%-5d no module name defined.\n",$line_number; 
+                  printf df "%-5d no module name defined.\n",$line_number; 
+                  &print_and_exit;
+               }
+            }
+        next;    
+        }
+        ###########################################################
+        elsif($module_name_occur == 1) {
+           if($cur eq ";"){
+                  printf "%-5d Warning.. no port defined.\n",$line_number;
+                  printf df "%-5d Warning.. no port defined.\n",$line_number;
+                  $warn_msg_no ++;
+                  #dont &print_and_exit;
+                  $mod_start = 0; $module_name_occur = 0; $module_port_occur = 0;
+                  $module_port_dot_need = 0;$module_port_coma_need = 0;$module_left_C_occur = 0;
+                  $body_start = 1;
+           }
+           elsif ($cur eq "(") {
+                  $mod_start = 0; $module_name_occur = 0;
+                  $module_port_occur = 1;
+                  $module_left_C_occur =1;
+           }
+           else {
+                  printf "%-5d Syntax error: missing \"\;\" or \"\(\" of module declaration.\n",$line_number;
+                  printf df "%-5d Syntax error: missing \"\;\" or \"\(\" of module declaration.\n",$line_number;
+                  &print_and_exit;
+           }
+        next;
+        }
+        ###########################################################
+        elsif($module_port_occur == 1 & $module_port_dot_need == 0 & $module_port_coma_need == 0) {
+           if (($temp = &is_word($cur))==1) { #is word
+                &check_res_name($cur);
+                &save_all_ports(0,$cur);
+                $module_port_dot_need = 1;
+           }
+           else { #not word
+               if($cur eq ")" & $module_left_C_occur ==1) {
+                  $module_left_C_occur = 0; 
+                  $module_port_coma_need = 1; 
+               }
+               elsif($cur ne ")" & $module_left_C_occur ==1) {
+                  if ($cur eq ",") { 
+                      printf "%-5d Syntax error:  port name expected before \"%s\".\n",$line_number,$cur;
+                      printf df "%-5d Syntax error:  port name expected before \"%s\".\n",$line_number,$cur;
+                      &print_and_exit;
+                  }
+                  else{    
+                      printf "%-5d Syntax error: missing \"\)\" after \"%s\" \n",$line_number,$pre;
+                      printf df "%-5d Syntax error: missing \"\)\" after \"%s\" \n",$line_number,$pre;
+                      &print_and_exit;
+                  }
+               }
+               elsif($cur eq ";") {
+                  $module_port_occur = 0; $module_port_dot_need = 0; $module_port_coma_need = 0;
+                  $module_port_dot_need = 0;$module_port_coma_need = 0;$module_left_C_occur = 0;
+                  $body_start = 1;
+               }
+               else {
+                  printf "%-5d Syntax error: missing port name.\n",$line_number;
+                  printf df "%-5d Syntax error: missing port name.\n",$line_number;
+                  &print_and_exit;
+               }
+           }
+        next;
+        }
+        ###########################################################
+        elsif($module_port_occur == 1 & $module_port_dot_need == 1) {
+           if(($temp = &is_word($cur))==0) { #not word
+               if($cur eq ",") {
+                  $module_port_dot_need = 0;
+               }
+               elsif($cur eq ")") {
+                  $module_port_dot_need = 0;
+                  $module_port_coma_need = 1;  
+               } 
+               else{
+                  printf "%-5d Syntax error: %-5s missing \"\,\".\n",$line_number,$pre;
+                  printf df "%-5d Syntax error: %-5s missing \"\,\".\n",$line_number,$pre;
+                  &print_and_exit;
+               }
+           }
+           else {
+                  printf "%-5d Syntax error: %-5s missing \"\,\".\n",$line_number,$pre;
+                  printf df "%-5d Syntax error: %-5s missing \"\,\".\n",$line_number,$pre;
+                  &print_and_exit;
+           }
+        next;
+        }
+        ###########################################################
+        elsif($module_port_occur == 1 & $module_port_coma_need == 1) {
+           if(($temp = &is_word($cur))==0) { #not word
+               if($cur eq ";") {
+                  $module_port_occur = 0; $module_port_dot_need = 0; $module_port_coma_need = 0;
+                  $module_port_dot_need = 0;$module_port_coma_need = 0;$module_left_C_occur = 0;
+                  $body_start = 1;
+               }
+               else {
+                  printf "%-5d Syntax error:  missing \"\;\" after %s \n",$line_number,$pre;
+                  printf df "%-5d Syntax error:  missing \"\;\" after %s \n",$line_number,$pre;
+                  &print_and_exit;
+               }
+           }
+           else {
+                  printf "%-5d Syntax error:  missing \"\;\" after %s \n",$line_number,$pre;
+                  printf df "%-5d Syntax error:  missing \"\;\" after %s \n",$line_number,$pre;
+                  &print_and_exit;
+           }
+        next;
+        }
+        
+        ###########################################################
+
+    
+}
+
+sub phase2_check_body {
+        my $cur = $_[0];
+        my $pre = $_[1];
+        my $temp;
+
+        ###########################################################
+        if($body_start == 1 & $cur eq "input"){
+           $body_start = 0;
+           $in_start = 1;
+        next;
+        }
+        ###########################################################
+        elsif($body_start == 1 & $cur eq "output"){
+           $body_start = 0;
+           $out_start = 1;
+        next;
+        }
+        ###########################################################
+        elsif($body_start == 1 & $cur eq "wire"){
+           $body_start = 0;
+           $wire_start = 1;
+        next;
+        }
+        ###########################################################
+        elsif($body_start == 1 & $cur eq "inout"){
+           $body_start = 0;
+           $inout_start = 1;
+        next;
+        }
+        ###########################################################
+        elsif($body_start == 1 & $cur ne "input" & $cur ne "output" &
+           $cur ne "wire" & $cur ne "endmodule" & ($temp = &is_word($cur))==1){
+           &check_res_name($cur);       
+           &save_ins($cur);
+           $body_start = 0;
+           $comp_start = 1;
+        next;
+        }
+}
+
+sub phase2_check_in {
+        my $cur = $_[0];
+        my $pre = $_[1];
+        my $temp;
+
+        ###########################################################
+        if($in_start == 1 & $in_dot_coma_need == 0) {
+           if($cur eq "[" & $in_dim_start_once == 0 ) { #dimension start
+              $in_start = 0; 
+              $in_dim_start = 1;
+           }
+           elsif($cur eq "[" & $in_dim_start_once == 1 ){
+              printf "%-5d Syntax error:  wrong \"\[\" after %s.\n",$line_number,$pre;
+              printf df "%-5d Syntax error:  wrong \"\[\" after %s.\n",$line_number,$pre;
+              &print_and_exit;
+           }
+           else {#no dimension
+                if(($temp = &is_word($cur))==1) { #is word 
+                    &check_res_name($cur);
+                    &save_all_ports(1,$cur);
+                    $in_dot_coma_need = 1;
+                }
+                else {
+                  printf "%-5d Syntax error: missing input port before %s.\n",$line_number,$cur;
+                  printf df "%-5d Syntax error: missing input port before %s.\n",$line_number,$cur;
+                  &print_and_exit;
+                }
+           }
+        next;
+        }
+
+        elsif($in_start == 1 & $in_dot_coma_need == 1) {
+           if($cur ne "," & $cur ne ";") {
+              printf "%-5d Syntax error: missing \"\,\" or \"\;\" after %s.\n",$line_number,$pre;
+              printf df "%-5d Syntax error: missing \"\,\" or \"\;\" after %s.\n",$line_number,$pre;
+              &print_and_exit;
+           }  
+           elsif($cur eq ","){
+              $in_start = 1;
+              $in_dot_coma_need = 0;   
+           }
+           else {#$cur eq ";" 
+              $in_start = 0;
+              $in_dot_coma_need = 0;
+              $in_dim_start_once = 0;
+              $body_start = 1;
+           }
+        next;
+        }
+        
+        elsif($in_dim_start == 1 & 
+           $in_dim_eye_need == 0 & $in_dim_number_need == 0 & $in_dim_right_C_need == 0){
+          if(($temp = &is_int($cur))==1) { #is int
+              $in_dim_eye_need = 1;
+          }
+          else {
+              printf "%-5d Syntax error: wrong dimension number after %s. \n",$line_number,$pre;
+              printf df "%-5d Syntax error: wrong dimension number after %s. \n",$line_number,$pre;
+              &print_and_exit;
+          }
+        next;
+        }
+
+        elsif($in_dim_start == 1 & $in_dim_eye_need == 1){
+           if($cur eq ":") {
+              $in_dim_eye_need = 0; 
+              $in_dim_number_need = 1;
+           }
+           else {
+
+              printf "%-5d Syntax error: missing \"\:\" after %s. \n",$line_number,$pre;
+              printf df "%-5d Syntax error: missing \"\:\" after %s. \n",$line_number,$pre;
+              &print_and_exit;
+           }
+        next;
+        }
+
+        elsif($in_dim_start == 1 & $in_dim_number_need == 1){
+           if(($temp = &is_int($cur))==1) { #is int
+               $in_dim_number_need = 0;
+               $in_dim_right_C_need = 1;
+           }
+           else {
+               printf "%-5d Syntax error: wrong dimension number after %s. \n",$line_number,$pre;
+               printf df "%-5d Syntax error: wrong dimension number after %s. \n",$line_number,$pre;
+               &print_and_exit;
+           }
+        next;
+        }
+
+        elsif($in_dim_start == 1 & $in_dim_right_C_need == 1){
+           if($cur eq "]") {
+               $in_dim_start = 0;
+               $in_dim_right_C_need = 0;
+               $in_start = 1;
+               $in_dim_start_once = 1;
+           }
+           else {
+               printf "%-5d Syntax error: missing \"\]\" after %s. \n",$line_number,$pre;
+               printf df "%-5d Syntax error: missing \"\]\" after %s. \n",$line_number,$pre;
+               &print_and_exit;
+           }
+        next;
+        }
+}
+
+sub phase2_check_out { 
+        my $cur = $_[0];
+        my $pre = $_[1];
+        my $temp;
+
+        ###########################################################
+        if($out_start == 1 & $out_dot_coma_need == 0) {
+           if($cur eq "[" & $out_dim_start_once == 0 ) { #dimension start
+              $out_start = 0; 
+              $out_dim_start = 1;
+           }
+           elsif($cur eq "[" & $out_dim_start_once == 1 ){
+              printf "%-5d Syntax error:  wrong \"\[\" after %s.\n",$line_number,$pre;
+              printf df "%-5d Syntax error:  wrong \"\[\" after %s.\n",$line_number,$pre;
+              &print_and_exit;
+           }
+           else {#no dimension
+                if(($temp = &is_word($cur))==1) { #is word 
+                    &check_res_name($cur);
+                    &save_all_ports(2,$cur);
+                    $out_dot_coma_need = 1;
+                }
+                else {
+                  printf "%-5d Syntax error: missing output port before %s.\n",$line_number,$cur;
+                  printf df "%-5d Syntax error: missing output port before %s.\n",$line_number,$cur;
+                  &print_and_exit;
+                }
+           }
+        next;
+        }
+
+        elsif($out_start == 1 & $out_dot_coma_need == 1) {
+           if($cur ne "," & $cur ne ";") {
+              printf "%-5d Syntax error: missing \"\,\" or \"\;\" after %s.\n",$line_number,$pre;
+              printf df "%-5d Syntax error: missing \"\,\" or \"\;\" after %s.\n",$line_number,$pre;
+              &print_and_exit;
+           }  
+           elsif($cur eq ","){
+              $out_start = 1;
+              $out_dot_coma_need = 0;   
+           }
+           else {#$cur eq ";" 
+              $out_start = 0;
+              $out_dot_coma_need = 0;
+              $out_dim_start_once = 0;
+              $body_start = 1;
+           }
+        next;
+        }
+        
+        elsif($out_dim_start == 1 & 
+           $out_dim_eye_need == 0 & $out_dim_number_need == 0 & $out_dim_right_C_need == 0){
+          if(($temp = &is_int($cur))==1) { #is int
+              $out_dim_eye_need = 1;
+          }
+          else {
+              printf "%-5d Syntax error: wrong dimension number after %s. \n",$line_number,$pre;
+              printf df "%-5d Syntax error: wrong dimension number after %s. \n",$line_number,$pre;
+              &print_and_exit;
+          }
+        next;
+        }
+
+        elsif($out_dim_start == 1 & $out_dim_eye_need == 1){
+           if($cur eq ":") {
+              $out_dim_eye_need = 0; 
+              $out_dim_number_need = 1;
+           }
+           else {
+
+              printf "%-5d Syntax error: missing \"\:\" after %s. \n",$line_number,$pre;
+              printf df "%-5d Syntax error: missing \"\:\" after %s. \n",$line_number,$pre;
+              &print_and_exit;
+           }
+        next;
+        }
+
+        elsif($out_dim_start == 1 & $out_dim_number_need == 1){
+           if(($temp = &is_int($cur))==1) { #is int
+               $out_dim_number_need = 0;
+               $out_dim_right_C_need = 1;
+           }
+           else {
+               printf "%-5d Syntax error: wrong dimension number after %s. \n",$line_number,$pre;
+               printf df "%-5d Syntax error: wrong dimension number after %s. \n",$line_number,$pre;
+               &print_and_exit;
+           }
+        next;
+        }
+
+        elsif($out_dim_start == 1 & $out_dim_right_C_need == 1){
+           if($cur eq "]") {
+               $out_dim_start = 0;
+               $out_dim_right_C_need = 0;
+               $out_start = 1;
+               $out_dim_start_once = 1;
+           }
+           else {
+               printf "%-5d Syntax error: missing \"\]\" after %s. \n",$line_number,$pre;
+               printf df "%-5d Syntax error: missing \"\]\" after %s. \n",$line_number,$pre;
+               &print_and_exit;
+           }
+        next;
+        }
+}
+
+sub phase2_check_wire {
+        my $cur = $_[0];
+        my $pre = $_[1];
+        my $temp;
+
+        ###########################################################
+        if($wire_start == 1 & $wire_dot_coma_need == 0) {
+           if($cur eq "[" & $wire_dim_start_once == 0 ) { #dimension start
+              $wire_start = 0; 
+              $wire_dim_start = 1;
+           }
+           elsif($cur eq "[" & $wire_dim_start_once == 1 ){
+              printf "%-5d Syntax error:  wrong \"\[\" after %s.\n",$line_number,$pre;
+              printf df "%-5d Syntax error:  wrong \"\[\" after %s.\n",$line_number,$pre;
+              &print_and_exit;
+           }
+           else {#no dimension
+                if(($temp = &is_word($cur))==1) { #is word
+                    &check_res_name($cur); 
+                    &save_all_ports(3,$cur);
+                    $wire_dot_coma_need = 1;
+                }
+                else {
+                  printf "%-5d Syntax error: missing wire name before %s.\n",$line_number,$cur;
+                  printf df "%-5d Syntax error: missing wire name before %s.\n",$line_number,$cur;
+                  &print_and_exit;
+                }
+           }
+        next;
+        }
+
+        elsif($wire_start == 1 & $wire_dot_coma_need == 1) {
+           if($cur ne "," & $cur ne ";") {
+              printf "%-5d Syntax error: missing \"\,\" or \"\;\" after %s.\n",$line_number,$pre;
+              printf df "%-5d Syntax error: missing \"\,\" or \"\;\" after %s.\n",$line_number,$pre;
+              &print_and_exit;
+           }  
+           elsif($cur eq ","){
+              $wire_start = 1;
+              $wire_dot_coma_need = 0;   
+           }
+           else {#$cur eq ";" 
+              $wire_start = 0;
+              $wire_dot_coma_need = 0;
+              $wire_dim_start_once = 0;
+              $body_start = 1;
+           }
+        next;
+        }
+        
+        elsif($wire_dim_start == 1 & 
+           $wire_dim_eye_need == 0 & $wire_dim_number_need == 0 & $wire_dim_right_C_need == 0){
+          if(($temp = &is_int($cur))==1) { #is int
+              $wire_dim_eye_need = 1;
+          }
+          else {
+              printf "%-5d Syntax error: wrong dimension number after %s. \n",$line_number,$pre;
+              printf df "%-5d Syntax error: wrong dimension number after %s. \n",$line_number,$pre;
+              &print_and_exit;
+          }
+        next;
+        }
+
+        elsif($wire_dim_start == 1 & $wire_dim_eye_need == 1){
+           if($cur eq ":") {
+              $wire_dim_eye_need = 0; 
+              $wire_dim_number_need = 1;
+           }
+           else {
+
+              printf "%-5d Syntax error: missing \"\:\" after %s. \n",$line_number,$pre;
+              printf df "%-5d Syntax error: missing \"\:\" after %s. \n",$line_number,$pre;
+              &print_and_exit;
+           }
+        next;
+        }
+
+        elsif($wire_dim_start == 1 & $wire_dim_number_need == 1){
+           if(($temp = &is_int($cur))==1) { #is int
+               $wire_dim_number_need = 0;
+               $wire_dim_right_C_need = 1;
+           }
+           else {
+               printf "%-5d Syntax error: wrong dimension number after %s. \n",$line_number,$pre;
+               printf df "%-5d Syntax error: wrong dimension number after %s. \n",$line_number,$pre;
+               &print_and_exit;
+           }
+        next;
+        }
+
+        elsif($wire_dim_start == 1 & $wire_dim_right_C_need == 1){
+           if($cur eq "]") {
+               $wire_dim_start = 0;
+               $wire_dim_right_C_need = 0;
+               $wire_start = 1;
+               $wire_dim_start_once = 1;
+           }
+           else {
+               printf "%-5d Syntax error: missing \"\]\" after %s. \n",$line_number,$pre;
+               printf df "%-5d Syntax error: missing \"\]\" after %s. \n",$line_number,$pre;
+               &print_and_exit;
+           }
+        next;
+        }
+}
+
+sub phase2_check_inout {
+        my $cur = $_[0];
+        my $pre = $_[1];
+        my $temp;
+
+        ###########################################################
+        if($inout_start == 1 & $inout_dot_coma_need == 0) {
+           if($cur eq "[" & $inout_dim_start_once == 0 ) { #dimension start
+              $inout_start = 0; 
+              $inout_dim_start = 1;
+           }
+           elsif($cur eq "[" & $inout_dim_start_once == 1 ){
+              printf "%-5d Syntax error:  wrong \"\[\" after %s.\n",$line_number,$pre;
+              printf df "%-5d Syntax error:  wrong \"\[\" after %s.\n",$line_number,$pre;
+              &print_and_exit;
+           }
+           else {#no dimension
+                if(($temp = &is_word($cur))==1) { #is word 
+                    &check_res_name($cur);
+                    &save_all_ports(4,$cur);
+                    $inout_dot_coma_need = 1;
+                }
+                else {
+                  printf "%-5d Syntax error: missing input port before %s.\n",$line_number,$cur;
+                  printf df "%-5d Syntax error: missing input port before %s.\n",$line_number,$cur;
+                  &print_and_exit;
+                }
+           }
+        next;
+        }
+
+        elsif($inout_start == 1 & $inout_dot_coma_need == 1) {
+           if($cur ne "," & $cur ne ";") {
+              printf "%-5d Syntax error: missing \"\,\" or \"\;\" after %s.\n",$line_number,$pre;
+              printf df "%-5d Syntax error: missing \"\,\" or \"\;\" after %s.\n",$line_number,$pre;
+              &print_and_exit;
+           }  
+           elsif($cur eq ","){
+              $inout_start = 1;
+              $inout_dot_coma_need = 0;   
+           }
+           else {#$cur eq ";" 
+              $inout_start = 0;
+              $inout_dot_coma_need = 0;
+              $inout_dim_start_once = 0;
+              $body_start = 1;
+           }
+        next;
+        }
+        
+        elsif($inout_dim_start == 1 & 
+           $inout_dim_eye_need == 0 & $inout_dim_number_need == 0 & $inout_dim_right_C_need == 0){
+          if(($temp = &is_int($cur))==1) { #is int
+              $inout_dim_eye_need = 1;
+          }
+          else {
+              printf "%-5d Syntax error: wrong dimension number after %s. \n",$line_number,$pre;
+              printf df "%-5d Syntax error: wrong dimension number after %s. \n",$line_number,$pre;
+              &print_and_exit;
+          }
+        next;
+        }
+
+        elsif($inout_dim_start == 1 & $inout_dim_eye_need == 1){
+           if($cur eq ":") {
+              $inout_dim_eye_need = 0; 
+              $inout_dim_number_need = 1;
+           }
+           else {
+
+              printf "%-5d Syntax error: missing \"\:\" after %s. \n",$line_number,$pre;
+              printf df "%-5d Syntax error: missing \"\:\" after %s. \n",$line_number,$pre;
+              &print_and_exit;
+           }
+        next;
+        }
+
+        elsif($inout_dim_start == 1 & $inout_dim_number_need == 1){
+           if(($temp = &is_int($cur))==1) { #is int
+               $inout_dim_number_need = 0;
+               $inout_dim_right_C_need = 1;
+           }
+           else {
+               printf "%-5d Syntax error: wrong dimension number after %s. \n",$line_number,$pre;
+               printf df "%-5d Syntax error: wrong dimension number after %s. \n",$line_number,$pre;
+               &print_and_exit;
+           }
+        next;
+        }
+
+        elsif($inout_dim_start == 1 & $inout_dim_right_C_need == 1){
+           if($cur eq "]") {
+               $inout_dim_start = 0;
+               $inout_dim_right_C_need = 0;
+               $inout_start = 1;
+               $inout_dim_start_once = 1;
+           }
+           else {
+               printf "%-5d Syntax error: missing \"\]\" after %s. \n",$line_number,$pre;
+               printf df "%-5d Syntax error: missing \"\]\" after %s. \n",$line_number,$pre;
+               &print_and_exit;
+           }
+        next;
+        }
+}
+
+sub phase2_check_comp {
+        my $cur = $_[0];
+        my $pre = $_[1];
+        my $temp;
+
+        ###########################################################
+        if($body_start == 1 & $cur ne "input" & $cur ne "output" &
+           $cur ne "wire" & $cur ne "endmodule" & ($temp = &is_word($cur))==0){
+              printf "%-5d Syntax error:  missing input/output/wire/endmoudle/instance.\n",$line_number;
+              printf df "%-5d Syntax error:  missing input/output/wire/endmoudle/instance.\n",$line_number;
+              &print_and_exit;
+        }
+         
+        if($comp_start == 1) {
+           if(($temp = &is_word($cur))==1) { #is word       
+               &check_res_name($cur);
+               &check_inst_name_repeat($cur);
+               &save_ins_name($cur);
+               $comp_start = 0;
+               $comp_left_C_need = 1;
+           }
+           else
+           {
+              printf "%-5d Syntax error:  missing instance name \n",$line_number;
+              printf df "%-5d Syntax error:  missing instance name \n",$line_number;
+              &print_and_exit;
+           }
+        next;   
+        }
+
+        elsif($comp_left_C_need == 1){
+            if($cur eq "(") {
+               $comp_left_C_need = 0;
+               $comp_dot_need = 1;
+            }
+            else {
+              printf "%-5d Syntax error:  missing \"\(\" \n",$line_number;
+              printf df "%-5d Syntax error:  missing \"\(\" \n",$line_number;
+              &print_and_exit;
+            }
+        next;
+        }
+
+        elsif($comp_dot_need ==1){
+           if($cur eq "."){                    # (name mapping)
+              $comp_dot_need = 0;
+              $comp_pin_name_need = 1;
+           }
+           elsif($cur eq ")"){
+              $comp_dot_need = 0;
+              $comp_coma_need = 1; 
+           }
+           elsif(($temp = &is_word($cur))==1) { #is word (position mapping) 
+              &check_res_name($cur); 
+              $comp_dot_need = 0;
+              $comp2_sep_need = 1;
+           }
+           else{
+              printf "%-5d Syntax error:  missing \"\.\" after %s(name mapping?) \n",$line_number,$pre;
+              printf df "%-5d Syntax error:  missing \"\.\" after %s(name mapping?) \n",$line_number,$pre;
+              &print_and_exit;
+           }
+        next;   
+       }
+       
+       elsif($comp2_sep_need == 1){
+           if($cur eq ","){
+              $comp2_sep_need = 0;      
+              $comp2_word_need = 1;
+           }
+           elsif($cur eq ")"){
+              $comp2_sep_need = 0;
+              $comp_coma_need = 1;               
+           }
+           else {
+              printf "%-5d Syntax error:  missing \"\,\" after %s(position mapping?) \n",$line_number,$pre;
+              printf df "%-5d Syntax error:  missing \"\,\" after %s(position mapping?) \n",$line_number,$pre;
+              &print_and_exit;                  
+           }            
+        next;
+       }
+       
+       elsif($comp2_word_need == 1){
+           if(($temp = &is_word($cur))==1) { #is word (position mapping)
+              &check_res_name($cur); 
+              $comp2_word_need = 0;
+              $comp2_sep_need = 1;              
+           }
+           else {
+              printf "%-5d Syntax error:  missing mapping pin name after %s \n",$line_number,$pre;
+              printf df "%-5d Syntax error:  missing mapping pin name after %s \n",$line_number,$pre;
+              &print_and_exit;             
+           }
+       next;
+       }
+        
+        elsif($comp_coma_need == 1) {
+           if($cur eq ";") {
+              $comp_coma_need = 0;
+              $body_start = 1;
+           }
+           else {
+              printf "%-5d Syntax error:  missing \"\;\" after %s \n",$line_number,$pre;
+              printf df "%-5d Syntax error:  missing \"\;\" after %s \n",$line_number,$pre;
+              &print_and_exit;
+           }
+        next;    
+        }
+
+        elsif($comp_pin_name_need == 1){
+           if(($temp = &is_word($cur))==1){ #pin name
+              &check_res_name($cur);
+              $comp_pin_name_need = 0;
+              $comp_pin_left_C_need = 1;
+           }
+           else {
+              printf "%-5d Syntax error:  missing pin name after %s \n",$line_number,$pre;
+              printf df "%-5d Syntax error:  missing pin name after %s \n",$line_number,$pre;
+              &print_and_exit;
+           }
+        next;
+        }
+
+        elsif($comp_pin_left_C_need == 1){ 
+           if($cur eq "("){
+              $comp_pin_left_C_need = 0;
+              $comp_port_name_need = 1;
+           }
+           else {
+              printf "%-5d Syntax error:  missing \"\(\" after %s \n",$line_number,$pre;
+              printf df "%-5d Syntax error:  missing \"\(\" after %s \n",$line_number,$pre;
+              &print_and_exit;
+           }
+        next;
+        }
+
+        elsif($comp_port_name_need == 1){ 
+           if(($temp = &is_word($cur))==1){ #port name #1
+              &check_res_name($cur);
+              $comp_port_name=$cur; 
+              $comp_port_name_need = 0;
+              $comp_pin_right_C_need = 1;
+           }
+           elsif($cur eq "{"){              #port name #2
+              $comp_port_name_need = 0;
+              $comp_pin_right_C_need_2 = 1;
+              $comp_port_name=$cur; 
+           }
+           elsif($cur eq ")"){
+              $comp_port_name_need = 0;
+              $comp_pin_sep_need = 1; 
+           }
+           else {
+              printf "%-5d Syntax error:  missing port name after %s \n",$line_number,$pre;
+              printf df "%-5d Syntax error:  missing port name after %s \n",$line_number,$pre;
+              &print_and_exit;
+           }
+        next;
+        }
+
+        elsif($comp_pin_right_C_need == 1) {
+           if($cur eq ")"){
+              #printf "port_name:".$comp_port_name."\n"; 
+              $comp_pin_right_C_need = 0;
+              $comp_pin_sep_need = 1;
+           }
+           elsif($cur eq "'" | $cur eq "[" | $cur eq "]"){
+               $comp_port_name=$comp_port_name.$cur;
+           }
+           elsif(($temp = &is_word($cur))==1) {#is word
+               &check_res_name($cur);
+               $comp_port_name=$comp_port_name.$cur;
+           }
+           else {
+              printf "%-5d Syntax error:  missing \"\)\" after %s \n",$line_number,$pre;
+              printf df "%-5d Syntax error:  missing \"\)\" after %s \n",$line_number,$pre;
+              &print_and_exit;
+           }
+        next;
+        }
+
+        elsif($comp_pin_right_C_need_2 == 1) {
+           if($cur eq ")"){
+              #printf "port_name:".$comp_port_name."\n"; 
+              $comp_pin_right_C_need_2 = 0;
+              $comp_pin_sep_need = 1;
+           }
+           elsif($cur eq "'" | $cur eq "[" | $cur eq "]" | $cur eq "}" | $cur eq ","){
+               $comp_port_name=$comp_port_name.$cur;
+           }
+           elsif(($temp = &is_word($cur))==1) {#is word
+               &check_res_name($cur);
+               $comp_port_name=$comp_port_name.$cur;
+           }
+           else {
+              printf "%-5d Syntax error:  missing \"\)\" after %s (cur:%s)\n",$line_number,$pre,$cur;
+              printf df "%-5d Syntax error:  missing \"\)\" after %s (cur:%s)\n",$line_number,$pre,$cur;
+              &print_and_exit;
+           }
+        next;
+        }
+
+        elsif($comp_pin_sep_need == 1){
+           if($cur eq ","){ 
+              $comp_pin_sep_need = 0;
+              $comp_dot_need = 1;
+           }
+           elsif($cur eq ")") {
+              $comp_pin_sep_need = 0;
+              $comp_coma_need = 1;
+           }
+           else {
+              printf "%-5d Syntax error:  missing \"\,\" or \"\)\" after %s \n",$line_number,$pre;
+              printf df "%-5d Syntax error:  missing \"\,\" or \"\)\" after %s \n",$line_number,$pre;
+              &print_and_exit;
+           }
+        next;
+        }
+        
+}
+
+sub phase3_check_end {
+        my $cur = $_[0];
+        my $pre = $_[1];
+
+        ###########################################################
+        if($body_start == 1 & $cur eq "endmodule"){
+
+           if($dump_port == 1) {
+              &check_port_number;
+              printf "%-5d[endmodule]\n",$line_number;
+              printf df "%-5d[endmodule]\n",$line_number;
+              &print_all_ports;
+              &print_all_inports;
+              &print_all_outports;
+              &print_all_inout;
+              &print_all_wires;
+           
+              if($total_port_number > 0){
+                 printf "     [R]: Total (PORT,IN,OUT,INOUT) : (".$total_port_number.",".$total_inport.",".$total_outport.",".$total_inout.")\n"; 
+                 printf df "     [R]: Total (PORT,IN,OUT,INOUT) : (".$total_port_number.",".$total_inport.",".$total_outport.",".$total_inout.")\n"; 
+              }
+
+              printf "\n\n";
+              printf df "\n\n";
+           }
+                      
+           #resets variables in vgram.pl
+           $parse_start = 1;
+           $mod_start = 0;
+           $module_name_occur = 0;
+           $module_port_occur = 0;
+           $module_port_dot_need = 0;
+           $module_port_coma_need = 0;
+           $module_left_C_occur = 0;
+           $body_start = 0;
+           $in_start = 0;
+           $in_dot_coma_need = 0;
+           $in_dim_start = 0;
+           $in_dim_start_once = 0;
+           $in_dim_eye_need = 0;
+           $in_dim_number_need = 0;
+           $in_dim_right_C_need = 0;
+           $out_start = 0;
+           $out_dot_coma_need = 0;
+           $out_dim_start = 0;
+           $out_dim_start_once = 0;
+           $out_dim_eye_need = 0;
+           $out_dim_number_need = 0;
+           $out_dim_right_C_need = 0;
+           $wire_start = 0;
+           $wire_dot_coma_need = 0;
+           $wire_dim_start = 0;
+           $wire_dim_start_once = 0;
+           $wire_dim_eye_need = 0;
+           $wire_dim_number_need = 0;
+           $wire_dim_right_C_need = 0;
+           $comp_start= 0;
+        
+           #variables in vparse.pl
+           if($dump_port == 1){
+              $total_port_number = 0;
+              $total_inport = 0;
+              $total_outport = 0;
+              $total_wire = 0;
+              $total_inout = 0;
+           }
+           
+           $module_start = 0;
+           $module_no ++;
+           
+        next;
+        }       
+        ###########################################################
+}
+
+sub check_res_name{
+    #my $temp=$_[0];
+    #my $i;
+    #for ($i=0;$i<=$#res_name;$i++) {
+    #     if($temp eq $res_name[$i]) {
+    #         printf "%-5d \"%s\" is reserved \n",$line_number,$temp;
+    #         printf df "%-5d \"%s\" is reserved \n",$line_number,$temp;
+    #         &print_and_exit;
+    #     }
+    #}
+
+    if(exists $H_res_name{$_[0]}) {
+       printf "%-5d \"%s\" is reserved \n",$line_number,$_[0];
+       printf df "%-5d \"%s\" is reserved \n",$line_number,$_[0];
+       &print_and_exit;
+    }
+}
+
+sub check_wrong_name{
+    #my $temp=$_[0];
+    #my $i;
+    #for ($i=0;$i<=$#wrong_name;$i++) {
+    #     if($temp eq $wrong_name[$i]) {
+    #         printf "%-5d \"%s\" is reserved \n",$line_number,$temp;
+    #         printf df "%-5d \"%s\" is reserved \n",$line_number,$temp;
+    #         &print_and_exit;
+    #     }
+    #}
+
+    if(exists $H_wrong_name{$_[0]}) {
+       printf "%-5d \"%s\" is reserved \n",$line_number,$_[0];
+       printf df "%-5d \"%s\" is reserved \n",$line_number,$_[0];
+       &print_and_exit;
+    }
+    
+}
+
+sub is_word {
+    $_ = $_[0];
+    if(/\w/) {
+        return 1;
+    }
+    else {
+        return 0;
+    }   
+}
+
+sub is_int {
+    $_ = $_[0];
+    if(/\d/) {
+        return 1;
+    }
+    else {
+        return 0;
+    }   
+}
+
+sub seperate_line {
+    #my $line;
+    $_=$_[0];
+    #s/(\b)/ $1 /g;
+    #$line=$_;
+    #printf "[".$line."]\n";
+
+    s/(\W)/ $1 /g;
+    #$line=$_;
+    #printf "[".$line."]\n";
+
+    #$_ = $line;
+    s/^\s+//g;   #delete space from head
+    #$line=$_;
+    #printf "[".$line."]\n";
+
+    #my @arr=split /\s+/, $line;
+    
+    #print "[".$_."]\n";
+    my @arr=split /\s+/, $_;
+
+    #printf "aaa: ".$#arr."\n";
+    #my $i;
+    #for($i=0;$i<=$#arr;$i++) {
+       #printf "arr[%3d]: %-10s...",$i,$arr[$i];
+  
+       #$_= $arr[$i];
+  
+       #if(/\w/) {
+       #  printf "This is a word!\n";
+       #}
+       #else {
+       #  printf "This is NOT a word!\n";       
+       #}        
+    #}
+    return @arr;
+}
+
+
+
+
+sub loop_ask{
+ my $scan;
+
+ printf    "Enter command:(Type [h|q] for help|quit):";
+ printf df "Enter command:(Type [h|q] for help|quit):";
+ while(1){
+   $scan = <>;  
+   chomp($scan);  
+   if ($scan eq "h") {
+       printf    "=======================================================\n";
+       printf    "[Command] | [Description] \n";
+       printf    " mname    | show module name of entire file\n";
+       if($dump_port == 1){
+       printf    " port     | dump ports info of specified module\n";
+       }
+       printf    " top      | dump top module\n";
+       printf    " hier     | dump hierarchy\n";
+       printf    " inst     | dump instances times of specified module\n";
+       printf    "=======================================================\n";
+       printf    "\nEnter command (Type [h|q] for help|quit): ";
+       printf df $scan."\n";
+       printf df "=======================================================\n";
+       printf df "[Command] | [Description] \n";
+       printf df " mname    | show module name of entire file\n";
+       if($dump_port == 1){
+       printf df " port     | dump ports info of specified module\n";
+       }
+       printf df " top      | dump top module\n";
+       printf df " hier     | dump hierarchy\n";
+       printf df " inst     | dump instances times of specified module\n";
+       printf df "=======================================================\n";
+       printf df "\nEnter command (Type [h|q] for help|quit): ";
+   }
+   elsif( $scan eq "top" | $scan eq "t"){
+      printf    "=======================================================\n";    
+      printf df $scan."\n";
+      printf df "=======================================================\n";    
+      &print_highest_module;
+      printf    "=======================================================\n";
+      printf    "\nEnter command (Type [h|q] for help|quit): ";
+      printf df "=======================================================\n";
+      printf df "\nEnter command (Type [h|q] for help|quit): ";
+   }
+   elsif( $scan eq "q"){
+      printf df $scan."\n";
+      printf "Thank you...\n\n";
+      printf df "Thank you...\n\n";
+      exit;
+   }
+   elsif( $scan eq "hier"){
+      printf    "=======================================================\n";    
+      printf df $scan."\n";
+      printf df "=======================================================\n";    
+      printf    "Highest module name(press Enter= top): ";
+      printf df "Highest module name(press Enter= top): ";
+      $scan =<>;
+      chomp($scan);
+      printf df $scan."\n";
+      my $v1 =$scan;
+      printf    "Desired depth (press Enter= all): ";
+      printf df "Desired depth (press Enter= all): ";
+      $scan =<>;
+      chomp($scan);
+      printf df $scan."\n";
+      my $v2 = $scan;
+       
+      if(exists $module_name_array{$v1} | $v1 eq "") {
+         $_ = $v2;
+         if((/\d/ & $v2 >= 0) | $v2 eq "") {
+            &print_hierarchy($v1,$v2);
+         }
+         else {
+            printf    "Please Enter integer from 0 to N. \n";
+            printf df "Please Enter integer from 0 to N. \n";
+         }
+      }
+      else {
+         printf    "No such module name exists. \n";
+         printf df "No such module name exists. \n";
+      }
+          
+      printf    "=======================================================\n";
+      printf    "\nEnter command (Type [h|q] for help|quit): ";
+      printf df "=======================================================\n";
+      printf df "\nEnter command (Type [h|q] for help|quit): ";
+        
+   }
+   elsif( $scan eq "mname" | $scan eq "m") {
+      printf    "=======================================================\n";
+      printf    "Modules:      \n\n";
+      printf df $scan."\n";
+      printf df "=======================================================\n";
+      printf df "Modules:      \n\n";
+      #my $i;
+      #for($i=0;$i<=$#module_name_array;$i++) {
+      #   printf "        (%s) $module_name_array[$i]\n",$i;
+      #}
+      my $key; my $value;my $num=1;
+      while(($key,$value) = each %module_name_array){
+          printf    "        (%1d)%-8s \n",$num,$key;
+          printf df "        (%1d)%-8s \n",$num,$key;
+	  $num++;
+      }      
+      printf    "\n";
+      printf df "\n";
+
+
+      printf    "=======================================================\n";
+      printf    "\nEnter command (Type [h|q] for help|quit): ";
+      printf df "=======================================================\n";
+      printf df "\nEnter command (Type [h|q] for help|quit): ";
+   }
+   elsif (($scan eq "port" | $scan eq "p" ) & $dump_port == 1) {
+
+      printf    "=======================================================\n";
+      printf    "Module name: ";
+      printf df $scan."\n";
+      printf df "=======================================================\n";
+      printf df "Module name: ";
+      $scan =<>;
+      chomp($scan);
+       
+      printf df $scan."\n";
+      my $value= &check_module_name($scan);
+      
+      if($value == 0){
+         printf "No such module name exits..\n";
+         printf df "No such module name exits..\n";
+      }
+      else {
+            $value = &find_module_name($scan);
+         my $temp  = $module_no;
+         $module_no = $value;
+         #$total_port_number = $#{$port_array[$module_no]} + 1;
+         $total_port_number = 0;
+         foreach (values %{ $port_array{$module_no} }){
+             $total_port_number ++;
+         }
+         
+         &print_all_ports;  
+         $module_no = $temp;
+         $total_port_number = 0;
+         
+      }
+      printf    "=======================================================\n";
+      printf    "\nEnter command (Type [h|q] for help|quit): ";
+      printf df "=======================================================\n";
+      printf df "\nEnter command (Type [h|q] for help|quit): ";
+   }
+   elsif ($scan eq "inst" | $scan eq "i") {
+      printf    "=======================================================\n";
+      printf    "Module name: ";
+      printf df $scan."\n";
+      printf df "=======================================================\n";
+      printf df "Module name: ";
+      $scan =<>;
+      chomp($scan);
+       
+      printf df $scan."\n";
+      my $value= &check_module_name($scan);
+      if($value == 0){
+         printf "No such module name exits..\n";
+         printf df "No such module name exits..\n";
+      }
+      else {
+         $value = &find_module_name($scan);
+         &print_all_inst($value);   
+      }
+      printf    "=======================================================\n";
+      printf    "\nEnter command (Type [h|q] for help|quit): ";
+      printf df "=======================================================\n";
+      printf df "\nEnter command (Type [h|q] for help|quit): ";
+   }
+   else {
+      printf df $scan."\n";
+      printf    "invalid command...\n";
+      printf df "invalid command...\n";
+      printf    "\nEnter command (Type [h|q] for help|quit): ";
+      printf df "\nEnter command (Type [h|q] for help|quit): ";
+   }
+ }#end while
+}
+
